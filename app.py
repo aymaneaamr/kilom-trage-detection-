@@ -269,14 +269,31 @@ with col2:
 # Instructions
 with st.expander("📖 Instructions d'utilisation"):
     st.markdown("""
-    ### Comment utiliser l'application:
+    **Comment utiliser l'application:**
     
-    1. **Installer Tesseract OCR** sur votre système
-    2. **Lancer l'application**: `streamlit run app.py`
-    3. **Saisir le numéro du tramway**
-    4. **Télécharger les photos** des compteurs
-    5. **Cliquer sur "Traiter les images"**
-    6. **Exporter les données** en Excel
+    1. Installer Tesseract OCR sur votre système
+    2. Lancer l'application: streamlit run app.py
+    3. Saisir le numéro du tramway
+    4. Télécharger les photos des compteurs
+    5. Cliquer sur 'Traiter les images'
+    6. Exporter les données en Excel
     
-    ### Pour le déploiement sur Streamlit Cloud:
-    Créez un fichier `packages.txt` avec:
+    **Pour le déploiement sur Streamlit Cloud:**
+    Créez un fichier packages.txt avec:
+    tesseract-ocr
+    tesseract-ocr-fra
+    
+    **Format attendu sur les photos:**
+    - Kilométrage: 12345 ou 12,345 ou 12345.6
+    - Heure: 14:30 ou 14h30 ou 14.30
+    
+    **Structure du fichier Excel:**
+    - Numéro Tramway
+    - Kilométrage (km)
+    - Heure
+    - Date extraction
+    """)
+
+# Footer
+st.markdown("---")
+st.markdown("🔧 Application développée pour l'extraction automatique des données tramway")
