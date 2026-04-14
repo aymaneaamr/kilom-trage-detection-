@@ -4,6 +4,5 @@ openpyxl
 Pillow
 numpy
 opencv-python-headless
-torch
-torchvision
-transformers
+paddlepaddle
+paddleocr
