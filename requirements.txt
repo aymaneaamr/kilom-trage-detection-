@@ -1,7 +1,9 @@
-streamlit>=1.29.0
-pandas>=2.1.3
-openpyxl>=3.1.2
-Pillow>=10.1.0
-pytesseract>=0.3.10
-opencv-python>=4.8.1.78
-numpy>=1.24.3
+streamlit
+pandas
+openpyxl
+Pillow
+numpy
+opencv-python-headless
+torch
+torchvision
+transformers
