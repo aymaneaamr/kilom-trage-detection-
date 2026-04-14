@@ -2,11 +2,22 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime
 import pytesseract
-from PIL import Image
+from PIL import Image, ImageEnhance, ImageFilter
 import re
 import io
-import cv2
 import numpy as np
+
+# Configuration automatique de Tesseract selon l'OS
+import platform
+import subprocess
+
+# Configuration de Tesseract
+if platform.system() == "Windows":
+    pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+elif platform.system() == "Linux":
+    pytesseract.pytesseract.tesseract_cmd = "/usr/bin/tesseract"
+elif platform.system() == "Darwin":
+    pytesseract.pytesseract.tesseract_cmd = "/usr/local/bin/tesseract"
 
 # Configuration de la page
 st.set_page_config(
@@ -19,22 +30,24 @@ st.set_page_config(
 st.title("🚋 Extraction Automatique des Données Tramway")
 st.markdown("---")
 
-# Fonction de prétraitement de l'image
+# Fonction de prétraitement de l'image (version PIL seulement)
 def preprocess_image(image):
-    """Améliore la qualité de l'image pour l'OCR"""
+    """Améliore la qualité de l'image pour l'OCR en utilisant PIL"""
     # Convertir en niveaux de gris
-    gray = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2GRAY)
+    gray = image.convert('L')
     
-    # Appliquer un seuillage adaptatif
-    processed = cv2.adaptiveThreshold(
-        gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
-        cv2.THRESH_BINARY, 11, 2
-    )
+    # Améliorer le contraste
+    enhancer = ImageEnhance.Contrast(gray)
+    enhanced = enhancer.enhance(2.0)
     
-    # Réduire le bruit
-    processed = cv2.medianBlur(processed, 3)
+    # Augmenter la netteté
+    sharpener = ImageEnhance.Sharpness(enhanced)
+    sharp = sharpener.enhance(2.0)
     
-    return processed
+    # Réduire le bruit (filtre médian)
+    denoised = sharp.filter(ImageFilter.MedianFilter(size=3))
+    
+    return denoised
 
 # Fonction d'extraction du texte
 def extract_text_from_image(image):
@@ -44,7 +57,7 @@ def extract_text_from_image(image):
         processed_img = preprocess_image(image)
         
         # Configuration pour pytesseract
-        custom_config = r'--oem 3 --psm 6'
+        custom_config = r'--oem 3 --psm 6 -c tessedit_char_whitelist=0123456789:.,hkm '
         
         # Extraire le texte
         text = pytesseract.image_to_string(processed_img, config=custom_config, lang='fra+eng')
@@ -57,32 +70,35 @@ def extract_text_from_image(image):
 # Fonction d'extraction du kilométrage
 def extract_kilometrage(text):
     """Extrait le kilométrage du texte"""
-    # Pattern pour trouver les nombres (avec ou sans virgule)
     patterns = [
         r'(\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{1,2})?)\s*(?:km|KM|Km|kilomètres?)?',
         r'(\d{4,6}(?:[.,]\d{1,2})?)',
-        r'(\d+[.,]\d+)\s*km'
+        r'(\d+[.,]\d+)\s*km',
+        r'(\d{4,6})'  # Pour les nombres simples de 4 à 6 chiffres
     ]
     
     for pattern in patterns:
         matches = re.findall(pattern, text)
         if matches:
             # Nettoyer et convertir
-            km_str = matches[0].replace(',', '.')
-            try:
-                return float(km_str)
-            except:
-                continue
+            km_str = str(matches[0]).replace(',', '.').strip()
+            # Enlever les caractères non numériques sauf le point
+            km_str = re.sub(r'[^\d.]', '', km_str)
+            if km_str and km_str != '.':
+                try:
+                    return float(km_str)
+                except:
+                    continue
     return None
 
 # Fonction d'extraction de l'heure
 def extract_time(text):
     """Extrait l'heure du texte"""
-    # Pattern pour trouver les heures
     time_patterns = [
         r'(\d{1,2}[:h]\d{2})',
         r'(\d{1,2})[:h](\d{2})',
-        r'(\d{1,2})[.:](\d{2})'
+        r'(\d{1,2})[.:](\d{2})',
+        r'(\d{2})[.:](\d{2})'  # Format HH.MM ou HH:MM
     ]
     
     for pattern in time_patterns:
@@ -92,7 +108,13 @@ def extract_time(text):
                 heure = f"{matches[0][0]}:{matches[0][1]}"
             else:
                 heure = matches[0].replace('h', ':')
-            return heure
+            # Valider que l'heure est plausible
+            try:
+                parts = heure.split(':')
+                if 0 <= int(parts[0]) <= 23 and 0 <= int(parts[1]) <= 59:
+                    return heure
+            except:
+                continue
     return None
 
 # Fonction principale de traitement
@@ -104,8 +126,8 @@ def process_image(image, tram_number):
         text = extract_text_from_image(image)
         
     # Afficher le texte extrait (debug)
-    with st.expander("Texte extrait de l'image"):
-        st.code(text)
+    with st.expander(f"Texte extrait de l'image"):
+        st.code(text if text else "Aucun texte détecté")
     
     # Extraire les données
     kilometrage = extract_kilometrage(text)
@@ -131,9 +153,8 @@ with st.sidebar:
     # Saisie manuelle du numéro de tramway
     tram_number = st.text_input("Numéro du Tramway:", placeholder="Ex: 1234")
     
-    # Option pour l'OCR
     st.markdown("---")
-    st.subheader("⚙️ Paramètres OCR")
+    st.subheader("⚙️ Paramètres")
     
     need_manual_input = st.checkbox("Saisie manuelle si extraction échoue")
     
@@ -144,7 +165,8 @@ with st.sidebar:
         "- Bon éclairage\n"
         "- Photo nette\n"
         "- Cadrer le compteur\n"
-        "- Éviter les reflets"
+        "- Éviter les reflets\n"
+        "- Chiffres bien lisibles"
     )
 
 # Zone principale
@@ -174,7 +196,8 @@ with col2:
         elif not uploaded_files:
             st.error("Veuillez télécharger au moins une photo")
         else:
-            for file in uploaded_files:
+            progress_bar = st.progress(0)
+            for idx, file in enumerate(uploaded_files):
                 # Lire l'image
                 image = Image.open(file)
                 
@@ -185,39 +208,55 @@ with col2:
                 result = process_image(image, tram_number)
                 st.session_state.data_list.append(result)
                 
+                # Mettre à jour la progression
+                progress_bar.progress((idx + 1) / len(uploaded_files))
+                
                 # Afficher le résultat
                 st.success(f"✅ Traitement de {file.name} terminé")
+            
+            st.success(f"🎉 Traitement terminé! {len(uploaded_files)} image(s) traitée(s)")
                 
     # Afficher les données
     if st.session_state.data_list:
         df = pd.DataFrame(st.session_state.data_list)
         st.dataframe(df, use_container_width=True)
         
+        # Statistiques
+        col_stats1, col_stats2, col_stats3 = st.columns(3)
+        with col_stats1:
+            st.metric("Total images", len(st.session_state.data_list))
+        
+        # Compter les kilométrages détectés
+        km_detected = sum(1 for x in st.session_state.data_list if x["Kilométrage (km)"] != "Non détecté")
+        with col_stats2:
+            st.metric("Kilométrages détectés", f"{km_detected}/{len(st.session_state.data_list)}")
+        
+        with col_stats3:
+            st.metric("Heures extraites", len(st.session_state.data_list))
+        
         # Bouton d'export Excel
-        if st.button("📥 Exporter vers Excel"):
-            # Créer un fichier Excel
-            output = io.BytesIO()
-            with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                df.to_excel(writer, sheet_name='Données Tramway', index=False)
-                
-                # Ajuster les largeurs des colonnes
-                worksheet = writer.sheets['Données Tramway']
-                for column in worksheet.columns:
-                    max_length = 0
-                    column_letter = column[0].column_letter
-                    for cell in column:
-                        try:
-                            if len(str(cell.value)) > max_length:
-                                max_length = len(str(cell.value))
-                        except:
-                            pass
-                    adjusted_width = min(max_length + 2, 50)
-                    worksheet.column_dimensions[column_letter].width = adjusted_width
+        excel_buffer = io.BytesIO()
+        with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
+            df.to_excel(writer, sheet_name='Données Tramway', index=False)
             
-            # Télécharger le fichier
+            # Ajuster les largeurs des colonnes
+            worksheet = writer.sheets['Données Tramway']
+            for column in worksheet.columns:
+                max_length = 0
+                column_letter = column[0].column_letter
+                for cell in column:
+                    try:
+                        if len(str(cell.value)) > max_length:
+                            max_length = len(str(cell.value))
+                    except:
+                        pass
+                adjusted_width = min(max_length + 2, 50)
+                worksheet.column_dimensions[column_letter].width = adjusted_width
+        
+        if st.button("📥 Exporter vers Excel", type="primary"):
             st.download_button(
                 label="💾 Télécharger le fichier Excel",
-                data=output.getvalue(),
+                data=excel_buffer.getvalue(),
                 file_name=f"tramway_{tram_number}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
@@ -232,26 +271,12 @@ with st.expander("📖 Instructions d'utilisation"):
     st.markdown("""
     ### Comment utiliser l'application:
     
-    1. **Installer les dépendances** (voir requirements.txt)
-    2. **Installer Tesseract OCR** sur votre système
-    3. **Lancer l'application**: `streamlit run app.py`
-    4. **Saisir le numéro du tramway**
-    5. **Télécharger les photos** des compteurs
-    6. **Cliquer sur "Traiter les images"**
-    7. **Exporter les données** en Excel
+    1. **Installer Tesseract OCR** sur votre système
+    2. **Lancer l'application**: `streamlit run app.py`
+    3. **Saisir le numéro du tramway**
+    4. **Télécharger les photos** des compteurs
+    5. **Cliquer sur "Traiter les images"**
+    6. **Exporter les données** en Excel
     
-    ### Structure du fichier Excel généré:
-    - Numéro Tramway
-    - Kilométrage (km)
-    - Heure
-    - Date extraction
-    
-    ### Notes importantes:
-    - Assurez-vous que les photos sont claires
-    - Le kilométrage doit être visible sur l'image
-    - L'heure peut être au format 12h ou 24h
-    """)
-
-# Footer
-st.markdown("---")
-st.markdown("🔧 Application développée pour l'extraction automatique des données tramway")
+    ### Pour le déploiement sur Streamlit Cloud:
+    Créez un fichier `packages.txt` avec:
