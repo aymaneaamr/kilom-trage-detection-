@@ -8,25 +8,25 @@ import cv2
 from paddleocr import PaddleOCR
 import re
 
-# Initialisation de PaddleOCR
+# Configuration de la page
+st.set_page_config(page_title="Extraction Tramway Auto", page_icon="🚋", layout="wide")
+st.title("🚋 Extraction Automatique des Données Tramway")
+
+# Initialisation de PaddleOCR (chargé une seule fois)
 @st.cache_resource
-def init_ocr():
-    return PaddleOCR(use_angle_cls=True, lang='en', show_log=False)
+def load_ocr():
+    return PaddleOCR(use_angle_cls=False, lang='en', show_log=False)
 
-ocr = init_ocr()
+ocr = load_ocr()
 
-st.set_page_config(page_title="Auto Tramway", layout="wide")
-st.title("🚋 Extraction automatique des compteurs")
-
-# Prétraitement agressif
-def preprocess_for_digits(image):
-    img = np.array(image.convert('L'))  # niveaux de gris
-    # Seuillage adaptatif
-    binary = cv2.adaptiveThreshold(img, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
-    # Inversion si nécessaire (chiffres clairs sur fond sombre)
-    if np.mean(binary) < 127:
-        binary = cv2.bitwise_not(binary)
-    # Redimensionnement
+def preprocess_image(image):
+    """Prétraitement agressif pour les compteurs à chiffres"""
+    # Conversion en niveaux de gris
+    img = np.array(image.convert('L'))
+    # Application d'un seuillage adaptatif pour binariser l'image
+    binary = cv2.adaptiveThreshold(img, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                                   cv2.THRESH_BINARY, 11, 2)
+    # Redimensionnement pour améliorer la reconnaissance
     h, w = binary.shape
     if w < 800:
         scale = 800 / w
@@ -35,70 +35,100 @@ def preprocess_for_digits(image):
         binary = cv2.resize(binary, (new_w, new_h), interpolation=cv2.INTER_CUBIC)
     return binary
 
-def extract_text_paddle(image):
-    processed = preprocess_for_digits(image)
-    result = ocr.ocr(processed, det=True, rec=True, cls=False)
-    texts = []
-    for line in result:
-        for item in line:
-            texts.append(item[1][0])  # texte reconnu
-    return ' '.join(texts)
+def extract_text_from_region(image_region):
+    """Extrait le texte d'une région d'image avec PaddleOCR"""
+    try:
+        processed = preprocess_image(image_region)
+        result = ocr.ocr(processed, det=True, rec=True, cls=False)
+        texts = []
+        if result and result[0]:
+            for line in result[0]:
+                texts.append(line[1][0])  # texte détecté
+        return ' '.join(texts)
+    except Exception as e:
+        st.warning(f"Erreur OCR sur une région: {str(e)}")
+        return ""
 
-# Découpage haut/bas
-def split_image(image):
-    w, h = image.size
-    top = image.crop((0, 0, w, h//2))
-    bottom = image.crop((0, h//2, w, h))
-    return top, bottom
-
-# Extraction des chiffres
 def extract_numbers(text):
+    """Extrait uniquement les chiffres du texte"""
     return re.sub(r'[^0-9]', '', text)
 
-# Interface
+def format_heure(raw_numbers):
+    """Formate une chaîne de chiffres en HH:MM:SS ou HH:MM"""
+    if not raw_numbers:
+        return None
+    if len(raw_numbers) >= 6:
+        return f"{raw_numbers[:2]}:{raw_numbers[2:4]}:{raw_numbers[4:6]}"
+    elif len(raw_numbers) >= 4:
+        return f"{raw_numbers[:2]}:{raw_numbers[2:4]}"
+    return None
+
+def format_kilometrage(raw_numbers):
+    """Convertit une chaîne de chiffres en entier"""
+    if not raw_numbers:
+        return None
+    try:
+        return int(raw_numbers)
+    except:
+        return None
+
+# Interface Streamlit
 with st.sidebar:
-    tram = st.text_input("Numéro tramway")
+    tram_number = st.text_input("Numéro du Tramway:", placeholder="Ex: 1234")
     st.markdown("---")
-    st.warning("Pour une bonne reconnaissance : photo nette, chiffres bien visibles, pas de reflets.")
+    st.info("💡 **Conseils pour les photos :**\n- Cadrez bien les chiffres\n- Évitez les reflets\n- Bonne luminosité")
 
-uploaded = st.file_uploader("Photos des compteurs", type=['jpg','png','jpeg'], accept_multiple_files=True)
+uploaded_files = st.file_uploader("Téléchargez les photos des compteurs",
+                                  type=['jpg', 'jpeg', 'png'],
+                                  accept_multiple_files=True)
 
-if st.button("Lancer l'extraction automatique") and uploaded and tram:
-    data = []
-    progress = st.progress(0)
-    for i, file in enumerate(uploaded):
-        img = Image.open(file)
-        st.image(img, caption=file.name, width=200)
-        top, bottom = split_image(img)
-        
-        # Extraction texte
-        text_top = extract_text_paddle(top)
-        text_bottom = extract_text_paddle(bottom)
-        
-        numbers_top = extract_numbers(text_top)
-        numbers_bottom = extract_numbers(text_bottom)
-        
-        # Interprétation
-        heure = None
-        if len(numbers_top) >= 4:
-            heure = f"{numbers_top[:2]}:{numbers_top[2:4]}"
-        if not heure:
-            heure = datetime.now().strftime("%H:%M")
-        
-        km = None
-        if len(numbers_bottom) >= 4:
-            km = int(numbers_bottom)
-        
-        data.append({
-            "Tramway": tram,
-            "Kilométrage": km if km else "Non détecté",
-            "Heure": heure,
-            "Date": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        })
-        progress.progress((i+1)/len(uploaded))
-    
-    df = pd.DataFrame(data)
+if st.button("🚀 Lancer l'extraction automatique", type="primary"):
+    if not tram_number:
+        st.error("Veuillez entrer le numéro du tramway")
+    elif not uploaded_files:
+        st.error("Veuillez télécharger au moins une photo")
+    else:
+        if 'data' not in st.session_state:
+            st.session_state.data = []
+        progress_bar = st.progress(0)
+        for idx, file in enumerate(uploaded_files):
+            image = Image.open(file)
+            st.image(image, caption=file.name, width=250)
+            # Découpage de l'image (moitié supérieure pour l'heure, moitié inférieure pour le km)
+            w, h = image.size
+            top = image.crop((0, 0, w, h//2))
+            bottom = image.crop((0, h//2, w, h))
+            # Extraction des textes
+            text_top = extract_text_from_region(top)
+            text_bottom = extract_text_from_region(bottom)
+            numbers_top = extract_numbers(text_top)
+            numbers_bottom = extract_numbers(text_bottom)
+            # Formatage
+            heure = format_heure(numbers_top)
+            if not heure:
+                heure = datetime.now().strftime("%H:%M")
+                st.warning("Heure non détectée, utilisation de l'heure actuelle")
+            km = format_kilometrage(numbers_bottom)
+            if not km:
+                st.error("Kilométrage non détecté")
+            # Sauvegarde
+            st.session_state.data.append({
+                "Numéro Tramway": tram_number,
+                "Kilométrage (km)": km if km else "Non détecté",
+                "Heure": heure,
+                "Date extraction": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "Fichier": file.name
+            })
+            progress_bar.progress((idx + 1) / len(uploaded_files))
+        st.success(f"Traitement terminé ! {len(uploaded_files)} photo(s) traitée(s).")
+
+# Affichage des résultats
+if 'data' in st.session_state and st.session_state.data:
+    df = pd.DataFrame(st.session_state.data)
     st.dataframe(df)
     buffer = io.BytesIO()
-    df.to_excel(buffer, index=False)
-    st.download_button("Exporter Excel", buffer.getvalue(), file_name="tramway.xlsx")
+    with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+        df.to_excel(writer, index=False)
+    st.download_button("📥 Télécharger le fichier Excel",
+                       data=buffer.getvalue(),
+                       file_name=f"tramway_{tram_number}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx")
