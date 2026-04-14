@@ -1,2 +1,10 @@
-libgl1-mesa-glx
-libglib2.0-0
+__pycache__/
+*.py[cod]
+*.pyo
+.env
+.venv
+venv/
+.DS_Store
+*.xlsx
+*.log
+.streamlit/secrets.toml
