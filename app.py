@@ -9,7 +9,6 @@ import numpy as np
 
 # Configuration automatique de Tesseract selon l'OS
 import platform
-import subprocess
 
 # Configuration de Tesseract
 if platform.system() == "Windows":
@@ -30,237 +29,95 @@ st.set_page_config(
 st.title("🚋 Extraction Automatique des Données Tramway")
 st.markdown("---")
 
-# Fonction de prétraitement avancée de l'image
+# Fonction de prétraitement améliorée pour chiffres sur fond sombre
 def preprocess_image(image):
-    """Améliore la qualité de l'image pour l'OCR avec plusieurs techniques"""
-    
+    """Prétraitement spécifique pour compteurs numériques"""
     # Convertir en niveaux de gris
     gray = image.convert('L')
     
-    # Essayer plusieurs méthodes de prétraitement
-    processed_images = []
-    
-    # Méthode 1: Contraste élevé
+    # Augmenter le contraste radicalement
     enhancer = ImageEnhance.Contrast(gray)
-    high_contrast = enhancer.enhance(3.0)
-    processed_images.append(high_contrast)
+    high_contrast = enhancer.enhance(4.0)
     
-    # Méthode 2: Netteté et contraste
-    sharpener = ImageEnhance.Sharpness(gray)
-    sharp = sharpener.enhance(2.0)
-    contrast_enhancer = ImageEnhance.Contrast(sharp)
-    sharp_contrast = contrast_enhancer.enhance(2.0)
-    processed_images.append(sharp_contrast)
+    # Augmenter la netteté
+    sharpener = ImageEnhance.Sharpness(high_contrast)
+    sharp = sharpener.enhance(3.0)
     
-    # Méthode 3: Inverser les couleurs (pour texte clair sur fond sombre)
-    inverted = ImageOps.invert(gray)
-    inverted_enhanced = ImageEnhance.Contrast(inverted).enhance(2.0)
-    processed_images.append(inverted_enhanced)
+    # Redimensionner pour améliorer la reconnaissance (x2)
+    width, height = sharp.size
+    enlarged = sharp.resize((width * 2, height * 2), Image.Resampling.LANCZOS)
     
-    # Méthode 4: Binarisation (noir et blanc pur)
-    threshold = 150
-    binary = gray.point(lambda x: 0 if x < threshold else 255, '1')
-    processed_images.append(binary)
+    # Binarisation avec seuil adaptatif
+    threshold = 180
+    binary = enlarged.point(lambda x: 0 if x < threshold else 255, '1')
     
-    return processed_images
+    return binary
 
-# Fonction d'extraction du texte avec plusieurs tentatives
-def extract_text_from_image(image):
-    """Extrait le texte de l'image avec plusieurs méthodes OCR"""
+# Fonction d'extraction du texte spécifique pour chiffres
+def extract_numbers_from_image(image):
+    """Extrait uniquement les chiffres de l'image"""
     try:
-        # Obtenir différentes versions prétraitées
-        processed_images = preprocess_image(image)
+        # Prétraiter l'image
+        processed = preprocess_image(image)
         
-        best_text = ""
-        best_confidence = 0
+        # Configuration OCR spéciale chiffres
+        custom_config = r'--oem 3 --psm 8 -c tessedit_char_whitelist=0123456789'
         
-        # Configurations OCR à essayer
-        configs = [
-            r'--oem 3 --psm 6',  # Bloc de texte uniforme
-            r'--oem 3 --psm 7',  # Ligne de texte unique
-            r'--oem 3 --psm 8',  # Mot unique
-            r'--oem 3 --psm 13', # Ligne de texte brute
-            r'--oem 3 --psm 6 -c tessedit_char_whitelist=0123456789:.,hkm '  # Chiffres seulement
-        ]
+        # Extraire le texte
+        text = pytesseract.image_to_string(processed, config=custom_config)
         
-        for img in processed_images:
-            for config in configs:
-                try:
-                    # Extraire le texte
-                    text = pytesseract.image_to_string(img, config=config, lang='fra+eng')
-                    
-                    # Nettoyer le texte
-                    text = text.strip()
-                    
-                    # Vérifier si on a trouvé des nombres
-                    if text and len(text) > len(best_text):
-                        # Vérifier si le texte contient des chiffres
-                        if re.search(r'\d', text):
-                            best_text = text
-                            
-                except Exception as e:
-                    continue
+        # Nettoyer pour ne garder que les chiffres
+        numbers = re.sub(r'[^0-9]', '', text)
         
-        return best_text if best_text else ""
-        
+        return numbers
     except Exception as e:
-        st.error(f"Erreur lors de l'extraction: {str(e)}")
+        st.error(f"Erreur OCR: {str(e)}")
         return ""
 
-# Fonction avancée d'extraction du kilométrage
-def extract_kilometrage(text):
-    """Extrait le kilométrage du texte avec plusieurs patterns"""
-    if not text:
-        return None
-    
-    # Nettoyer le texte
-    text = text.replace(' ', '').replace('\n', ' ')
-    
-    # Patterns pour le kilométrage
-    patterns = [
-        # Pattern pour nombre avec virgule ou point (ex: 12,345 ou 12345.6)
-        r'(\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{1,2})?)',
-        # Pattern pour nombre de 4 à 7 chiffres (kilométrage typique)
-        r'(\d{4,7})',
-        # Pattern pour nombre avec point décimal
-        r'(\d+\.\d+)',
-        # Pattern pour nombre avec virgule décimale
-        r'(\d+,\d+)',
-    ]
-    
-    all_matches = []
-    for pattern in patterns:
-        matches = re.findall(pattern, text)
-        for match in matches:
-            # Nettoyer et convertir
-            km_str = str(match).replace(',', '.')
-            # Enlever tout sauf chiffres et point
-            km_str = re.sub(r'[^\d.]', '', km_str)
-            if km_str and km_str != '.':
-                try:
-                    value = float(km_str)
-                    # Filtrer les valeurs plausibles (entre 0 et 999999)
-                    if 0 < value < 1000000:
-                        all_matches.append(value)
-                except:
-                    continue
-    
-    # Retourner la valeur la plus élevée (probablement le kilométrage)
-    if all_matches:
-        return max(all_matches)
-    return None
-
-# Fonction avancée d'extraction de l'heure
-def extract_time(text):
-    """Extrait l'heure du texte avec plusieurs formats"""
-    if not text:
-        return None
-    
-    # Nettoyer le texte
-    text = text.replace(' ', '')
-    
-    # Patterns pour l'heure
-    time_patterns = [
-        # Format HH:MM
-        r'(\d{1,2}:\d{2})',
-        # Format HHhMM
-        r'(\d{1,2})h(\d{2})',
-        # Format HH.MM
-        r'(\d{1,2})\.(\d{2})',
-        # Format HHMM (sans séparateur)
-        r'(\d{2})(\d{2})',
-    ]
-    
-    for pattern in time_patterns:
-        matches = re.findall(pattern, text)
-        for match in matches:
-            try:
-                if isinstance(match, tuple):
-                    if len(match) == 2:
-                        heure = f"{match[0]}:{match[1]}"
-                    else:
-                        continue
-                else:
-                    heure = match
-                
-                # Nettoyer et valider
-                if ':' in heure:
-                    parts = heure.split(':')
-                    if len(parts) == 2:
-                        h = int(parts[0])
-                        m = int(parts[1])
-                        if 0 <= h <= 23 and 0 <= m <= 59:
-                            return f"{h:02d}:{m:02d}"
-            except:
-                continue
-    
-    return None
-
-# Fonction pour extraire la région spécifique de l'image
-def crop_counters(image):
-    """Découpe l'image pour isoler les compteurs (haut = heure, bas = km)"""
+# Fonction pour extraire les deux compteurs
+def extract_counters(image):
+    """Extrait les valeurs des compteurs"""
     width, height = image.size
     
-    # Découper la moitié supérieure pour l'heure
-    heure_region = image.crop((0, 0, width, height // 2))
+    # Découper l'image (30% haut pour heure, 70% bas pour km)
+    # Ajusté car l'heure est en haut et km en bas
+    heure_region = image.crop((0, 0, width, int(height * 0.4)))
+    km_region = image.crop((0, int(height * 0.4), width, height))
     
-    # Découper la moitié inférieure pour le kilométrage
-    km_region = image.crop((0, height // 2, width, height))
+    # Extraire les chiffres
+    heure_raw = extract_numbers_from_image(heure_region)
+    km_raw = extract_numbers_from_image(km_region)
     
-    return heure_region, km_region
+    return heure_raw, km_raw
 
-# Fonction principale de traitement améliorée
-def process_image(image, tram_number):
-    """Traite une image et extrait les informations"""
+# Fonction pour formater l'heure
+def format_heure(raw_numbers):
+    """Formate les chiffres en heure HH:MM"""
+    if not raw_numbers:
+        return None
     
-    # Essayer d'extraire de l'image complète d'abord
-    with st.spinner("Analyse de l'image en cours..."):
-        full_text = extract_text_from_image(image)
-        
-        # Découper l'image pour isoler heure et km
-        heure_region, km_region = crop_counters(image)
-        heure_text = extract_text_from_image(heure_region)
-        km_text = extract_text_from_image(km_region)
+    # Prendre les 4 premiers chiffres
+    if len(raw_numbers) >= 4:
+        heure_str = raw_numbers[:4]
+        return f"{heure_str[:2]}:{heure_str[2:4]}"
+    elif len(raw_numbers) == 3:
+        return f"0{raw_numbers[0]}:{raw_numbers[1:3]}"
+    elif len(raw_numbers) == 2:
+        return f"00:{raw_numbers}"
+    return None
+
+# Fonction pour formater le kilométrage
+def format_kilometrage(raw_numbers):
+    """Formate les chiffres en kilométrage"""
+    if not raw_numbers:
+        return None
     
-    # Afficher les textes extraits (debug)
-    with st.expander("Texte extrait de l'image complète"):
-        st.code(full_text if full_text else "Aucun texte détecté")
-    
-    with st.expander("Texte extrait - Zone Heure (haut)"):
-        st.code(heure_text if heure_text else "Aucun texte détecté")
-    
-    with st.expander("Texte extrait - Zone Kilométrage (bas)"):
-        st.code(km_text if km_text else "Aucun texte détecté")
-    
-    # Extraire les données avec priorité aux zones spécifiques
-    # Pour l'heure, d'abord la zone heure, puis l'image complète
-    heure = extract_time(heure_text)
-    if not heure:
-        heure = extract_time(full_text)
-    
-    # Pour le kilométrage, d'abord la zone km, puis l'image complète
-    kilometrage = extract_kilometrage(km_text)
-    if not kilometrage:
-        kilometrage = extract_kilometrage(full_text)
-    
-    # Si l'heure n'est pas trouvée, utiliser l'heure actuelle
-    if not heure:
-        heure = datetime.now().strftime("%H:%M")
-        st.warning("⚠️ Heure non détectée, utilisation de l'heure actuelle")
-    else:
-        st.success(f"✅ Heure détectée: {heure}")
-    
-    if kilometrage:
-        st.success(f"✅ Kilométrage détecté: {kilometrage} km")
-    else:
-        st.warning("⚠️ Kilométrage non détecté")
-    
-    return {
-        "Numéro Tramway": tram_number,
-        "Kilométrage (km)": kilometrage if kilometrage else "Non détecté",
-        "Heure": heure,
-        "Date extraction": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    }
+    # Convertir en nombre
+    try:
+        km = int(raw_numbers)
+        return km
+    except:
+        return None
 
 # Interface principale - Sidebar
 with st.sidebar:
@@ -271,22 +128,24 @@ with st.sidebar:
     tram_number = st.text_input("Numéro du Tramway:", placeholder="Ex: 1234")
     
     st.markdown("---")
-    st.subheader("⚙️ Paramètres")
+    st.subheader("⚙️ Mode d'extraction")
     
-    # Option pour ajuster le seuillage
-    threshold = st.slider("Seuil de binarisation", 50, 200, 120, 
-                         help="Ajustez pour améliorer la reconnaissance des chiffres")
+    extraction_mode = st.radio(
+        "Choisissez le mode:",
+        ["Automatique (OCR)", "Manuel (saisie directe)"],
+        help="Mode automatique tente de lire la photo, mode manuel permet de saisir les valeurs"
+    )
     
-    # Informations
     st.markdown("---")
     st.info(
-        "💡 **Conseils pour les photos:**\n"
-        "- Bon éclairage\n"
-        "- Photo nette\n"
-        "- Cadrer le compteur\n"
-        "- Éviter les reflets\n"
-        "- Chiffres bien lisibles\n"
-        "- Prendre la photo de face"
+        "💡 **Pour une meilleure reconnaissance:**\n\n"
+        "• Photo bien éclairée\n"
+        "• Cadrer uniquement les chiffres\n"
+        "• Éviter les reflets\n"
+        "• Photo nette et de face\n\n"
+        "📌 **Structure du compteur:**\n"
+        "• Haut: Heure (ex: 823743 → 82:37:43 ou 14:37)\n"
+        "• Bas: Kilométrage (ex: 10406871)"
     )
 
 # Zone principale
@@ -309,104 +168,173 @@ with col1:
 with col2:
     st.subheader("📊 Données extraites")
     
-    # Bouton de traitement
-    if st.button("🔄 Traiter les images", type="primary"):
-        if not tram_number:
-            st.error("Veuillez entrer le numéro du tramway")
-        elif not uploaded_files:
-            st.error("Veuillez télécharger au moins une photo")
-        else:
-            progress_bar = st.progress(0)
+    # Traitement automatique
+    if extraction_mode == "Automatique (OCR)":
+        if st.button("🔄 Traiter les images avec OCR", type="primary"):
+            if not tram_number:
+                st.error("Veuillez entrer le numéro du tramway")
+            elif not uploaded_files:
+                st.error("Veuillez télécharger au moins une photo")
+            else:
+                for file in uploaded_files:
+                    # Lire l'image
+                    image = Image.open(file)
+                    
+                    # Afficher l'image
+                    st.image(image, caption=f"Photo: {file.name}", width=250)
+                    
+                    # Extraire les compteurs
+                    heure_raw, km_raw = extract_counters(image)
+                    
+                    # Afficher les résultats bruts
+                    with st.expander(f"Détails extraction - {file.name}"):
+                        st.write(f"Chiffres bruts heure: {heure_raw if heure_raw else 'Non détectés'}")
+                        st.write(f"Chiffres bruts km: {km_raw if km_raw else 'Non détectés'}")
+                    
+                    # Formater les résultats
+                    heure = format_heure(heure_raw)
+                    kilometrage = format_kilometrage(km_raw)
+                    
+                    if not heure:
+                        heure = datetime.now().strftime("%H:%M")
+                        st.warning("⚠️ Heure non détectée, utilisation heure actuelle")
+                    
+                    if not kilometrage:
+                        st.error("❌ Kilométrage non détecté - Utilisez le mode manuel")
+                    
+                    st.session_state.data_list.append({
+                        "Numéro Tramway": tram_number,
+                        "Kilométrage (km)": kilometrage if kilometrage else "Non détecté",
+                        "Heure": heure,
+                        "Date extraction": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    })
+                
+                st.success(f"Traitement terminé! {len(uploaded_files)} image(s)")
+    
+    # Traitement manuel
+    else:
+        st.markdown("### Saisie manuelle des données")
+        
+        if uploaded_files:
             for idx, file in enumerate(uploaded_files):
-                # Lire l'image
                 image = Image.open(file)
+                st.image(image, caption=f"Photo {idx+1}: {file.name}", width=200)
                 
-                # Afficher l'image
-                st.image(image, caption=f"Photo: {file.name}", width=300)
+                # Créer des champs de saisie uniques pour chaque image
+                heure_key = f"heure_{idx}_{file.name}"
+                km_key = f"km_{idx}_{file.name}"
                 
-                # Traiter l'image
-                result = process_image(image, tram_number)
-                st.session_state.data_list.append(result)
+                col_h, col_km = st.columns(2)
+                with col_h:
+                    heure_manuelle = st.text_input(
+                        f"Heure (HH:MM) - Image {idx+1}",
+                        placeholder="Ex: 14:37",
+                        key=heure_key
+                    )
+                with col_km:
+                    km_manuelle = st.text_input(
+                        f"Kilométrage - Image {idx+1}",
+                        placeholder="Ex: 10406871",
+                        key=km_key
+                    )
                 
-                # Mettre à jour la progression
-                progress_bar.progress((idx + 1) / len(uploaded_files))
+                # Bouton pour ajouter cette image
+                if st.button(f"✅ Ajouter Image {idx+1}", key=f"btn_{idx}"):
+                    if heure_manuelle and km_manuelle:
+                        st.session_state.data_list.append({
+                            "Numéro Tramway": tram_number,
+                            "Kilométrage (km)": km_manuelle,
+                            "Heure": heure_manuelle,
+                            "Date extraction": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        })
+                        st.success(f"Image {idx+1} ajoutée!")
+                    else:
+                        st.error("Veuillez remplir l'heure ET le kilométrage")
             
-            st.success(f"🎉 Traitement terminé! {len(uploaded_files)} image(s) traitée(s)")
+            # Bouton pour tout ajouter en lot
+            if st.button("📦 Ajouter toutes les images en lot"):
+                all_filled = True
+                for idx, file in enumerate(uploaded_files):
+                    heure_key = f"heure_{idx}_{file.name}"
+                    km_key = f"km_{idx}_{file.name}"
+                    
+                    if heure_key in st.session_state and km_key in st.session_state:
+                        if st.session_state[heure_key] and st.session_state[km_key]:
+                            st.session_state.data_list.append({
+                                "Numéro Tramway": tram_number,
+                                "Kilométrage (km)": st.session_state[km_key],
+                                "Heure": st.session_state[heure_key],
+                                "Date extraction": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                            })
+                        else:
+                            all_filled = False
+                    else:
+                        all_filled = False
                 
-    # Afficher les données
+                if all_filled:
+                    st.success(f"{len(uploaded_files)} images ajoutées!")
+                else:
+                    st.error("Veuillez remplir toutes les données")
+        else:
+            st.info("Téléchargez des photos pour la saisie manuelle")
+    
+    # Affichage des données collectées
     if st.session_state.data_list:
+        st.markdown("---")
+        st.subheader("📋 Données collectées")
+        
         df = pd.DataFrame(st.session_state.data_list)
         st.dataframe(df, use_container_width=True)
         
         # Statistiques
-        col_stats1, col_stats2, col_stats3 = st.columns(3)
-        with col_stats1:
-            st.metric("Total images", len(st.session_state.data_list))
+        st.metric("Total enregistrements", len(st.session_state.data_list))
         
-        # Compter les kilométrages détectés
-        km_detected = sum(1 for x in st.session_state.data_list if x["Kilométrage (km)"] != "Non détecté")
-        with col_stats2:
-            st.metric("Kilométrages détectés", f"{km_detected}/{len(st.session_state.data_list)}")
-        
-        with col_stats3:
-            st.metric("Heures extraites", len(st.session_state.data_list))
-        
-        # Bouton d'export Excel
+        # Export Excel
         excel_buffer = io.BytesIO()
         with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
             df.to_excel(writer, sheet_name='Données Tramway', index=False)
-            
-            # Ajuster les largeurs des colonnes
-            worksheet = writer.sheets['Données Tramway']
-            for column in worksheet.columns:
-                max_length = 0
-                column_letter = column[0].column_letter
-                for cell in column:
-                    try:
-                        if len(str(cell.value)) > max_length:
-                            max_length = len(str(cell.value))
-                    except:
-                        pass
-                adjusted_width = min(max_length + 2, 50)
-                worksheet.column_dimensions[column_letter].width = adjusted_width
         
-        if st.button("📥 Exporter vers Excel", type="primary"):
+        col_btn1, col_btn2 = st.columns(2)
+        with col_btn1:
             st.download_button(
-                label="💾 Télécharger le fichier Excel",
+                label="📥 Exporter vers Excel",
                 data=excel_buffer.getvalue(),
                 file_name=f"tramway_{tram_number}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
         
-        # Bouton pour effacer
-        if st.button("🗑️ Effacer toutes les données"):
-            st.session_state.data_list = []
-            st.rerun()
+        with col_btn2:
+            if st.button("🗑️ Effacer toutes les données"):
+                st.session_state.data_list = []
+                st.rerun()
 
 # Instructions
-with st.expander("📖 Instructions d'utilisation"):
+with st.expander("📖 Mode d'emploi"):
     st.markdown("""
-    **Comment utiliser l'application:**
+    ### Pour utiliser l'application:
     
-    1. Saisir le numéro du tramway
-    2. Télécharger les photos des compteurs
-    3. Cliquer sur 'Traiter les images'
-    4. Vérifier les données extraites
-    5. Exporter vers Excel
+    **Mode Automatique (OCR):**
+    - L'application tente de lire automatiquement les chiffres
+    - Si la reconnaissance échoue, passez en mode manuel
     
-    **Améliorations apportées:**
-    - Découpage automatique de l'image (haut = heure, bas = km)
-    - Multiples méthodes de prétraitement
-    - Plusieurs configurations OCR
-    - Extraction avancée des chiffres
+    **Mode Manuel (Recommandé pour vos photos):**
+    1. Sélectionnez "Manuel (saisie directe)"
+    2. Téléchargez les photos
+    3. Saisissez l'heure (format HH:MM) ex: 14:37
+    4. Saisissez le kilométrage ex: 10406871
+    5. Cliquez sur "Ajouter"
     
-    **Si l'extraction échoue:**
-    - Vérifiez que la photo est nette
-    - Assurez un bon contraste
-    - Recadrez manuellement si nécessaire
-    - Utilisez l'option de saisie manuelle
+    **Pour votre compteur:**
+    - Heure lue: 823743 → à saisir comme 82:37:43 ou 14:37
+    - Kilométrage: 10406871
+    
+    ### Format du fichier Excel exporté:
+    - Numéro Tramway
+    - Kilométrage (km)
+    - Heure
+    - Date extraction
     """)
 
 # Footer
 st.markdown("---")
-st.markdown("🔧 Application développée pour l'extraction automatique des données tramway")
+st.markdown("🔧 Application développée pour l'extraction des données tramway")
