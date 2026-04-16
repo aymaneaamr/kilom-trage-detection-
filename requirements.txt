@@ -2,8 +2,4 @@ streamlit
 pandas
 openpyxl
 Pillow
-numpy
-opencv-python-headless
-paddlepaddle
-paddleocr
 requests
